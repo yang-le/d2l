@@ -1,0 +1,6 @@
+checkpoint
+*.xml
+*.npy
+*.index
+*.data*
+*.csv
