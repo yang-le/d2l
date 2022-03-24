@@ -127,7 +127,7 @@ def load_data_fashion_mnist(batch_size, resize=None):
         return tf.expand_dims(X, axis=3) / 255, tf.cast(y, dtype='int32')
 
     def resize_fn(X, y):
-        return tf.image.resize_with_pad(X, resize, resize) if resize else X, y
+        return tf.compat.v1.image.resize_image_with_pad(X, resize, resize) if resize else X, y
 
     return (
         tf.data.Dataset.from_tensor_slices(process(*mnist_train)).shuffle(len(mnist_train[0])).batch(batch_size).map(
@@ -380,7 +380,7 @@ def show_images(imgs, num_rows, num_cols, titles=None, scale=1.5):
 
 def try_dev(dev, i):
     """如果存在，则返回dev(i)，否则返回cpu()"""
-    if len(tf.config.experimental.list_physical_devices(dev)) >= i + 1:
+    if len(tf.config.experimental.list_physical_devices(dev)) > i:
         return tf.device(f'/device:{dev}:{i}')
     return tf.device('/CPU:0')
 
@@ -455,10 +455,8 @@ class TrainCallback(tf.keras.callbacks.Callback):
             print(f'{num_examples / self.timer.avg():.1f} examples/sec on 'f'{str(self.device_name)}')
 
 
-def train_on_device(net_fn, train_iter, test_iter, num_epochs, lr, device):
+def train_on_device(net_fn, train_iter, test_iter, num_epochs, lr, strategy, device_name):
     """用GPU训练模型(在第六章定义)"""
-    device_name = device._device_name if hasattr(device, '_device_name') else device.args[1]
-    strategy = tf.distribute.OneDeviceStrategy(device_name)
     with strategy.scope():
         optimizer = tf.keras.optimizers.SGD(learning_rate=lr)
         loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
