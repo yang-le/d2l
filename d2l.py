@@ -211,6 +211,7 @@ def show_images(imgs, num_rows, num_cols, titles=None, scale=1.5):
         ax.axes.get_yaxis().set_visible(False)
         if titles:
             ax.set_title(titles[i])
+    plt.show()
     return axes
 
 
@@ -355,7 +356,6 @@ def predict(net, test_iter, n=6):
     preds = get_fashion_mnist_labels(net(X).argmax(axis=1))
     titles = [true + '\n' + pred for true, pred in zip(trues, preds)]
     show_images(X[0:n].reshape((n, 28, 28)), 1, n, titles=titles[0:n])
-    plt.show()
 
 
 def evaluate_loss(net, data_iter, loss):
@@ -419,7 +419,7 @@ def train_on_dev(net, train_iter, test_iter, num_epochs, lr, device):
     """用GPU训练模型(在第六章定义)"""
     def init_weights(m):
         if type(m) == nn.Linear or type(m) == nn.Conv2d:
-            nn.init.xavier_uniform(m.weight)
+            nn.init.xavier_uniform_(m.weight)
     net.apply(init_weights)
     print('training on', device)
     net.to(device)
@@ -452,4 +452,4 @@ def train_on_dev(net, train_iter, test_iter, num_epochs, lr, device):
           f'test acc {test_acc:.3f}')
     print(f'{metric[2] * num_epochs / timer.sum():.1f} examples/sec '
           f'on {str(device)}')
-
+    plt.show()
