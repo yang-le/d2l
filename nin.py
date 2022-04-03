@@ -28,8 +28,15 @@ def net():
     ])
 
 
-X = tf.random.uniform((1, 224, 224, 1))
-for layer in net().layers:
-    X = layer(X)
-    print(layer.__class__.__name__,'output shape:\t', X.shape)
+if __name__ == "__main__":
+    tf.compat.v1.enable_eager_execution()
+    # X = tf.random.uniform((1, 224, 224, 1))
+    # for layer in net().layers:
+    #     X = layer(X)
+    #     print(layer.__class__.__name__,'output shape:\t', X.shape)
 
+    lr, num_epochs, batch_size = 0.1, 10, 128
+    train_iter, test_iter = d2l.load_data_fashion_mnist(batch_size, resize=224)
+    strategy = tf.distribute.OneDeviceStrategy('/device:DML:0')
+    # strategy = tf.distribute.MirroredStrategy(['/device:DML:0', '/device:DML:1'])
+    d2l.train_on_device(net, train_iter, test_iter, num_epochs, lr, strategy, 'DML')

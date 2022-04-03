@@ -591,9 +591,9 @@ class TrainCallback(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
         self.timer.stop()
         try:
-            test_acc = self.net.evaluate(self.test_iter, verbose=0, return_dict=True)['accuracy']
+            test_acc = self.net.evaluate(self.test_iter, verbose=2, return_dict=True)['accuracy']
         except TypeError:
-            test_acc = self.net.evaluate(self.test_iter, verbose=0)[1]
+            test_acc = self.net.evaluate(self.test_iter, verbose=2)[1]
         metrics = (logs['loss'], logs['accuracy'] if 'accuracy' in logs else logs['acc'], test_acc)
         self.animator.add(epoch + 1, metrics)
         if epoch == self.num_epochs - 1:
@@ -613,24 +613,29 @@ def train_on_device(net_fn, train_iter, test_iter, num_epochs, lr, strategy, dev
         net = net_fn()
         net.compile(optimizer=optimizer, loss=loss, metrics=['accuracy'])
     callback = TrainCallback(net, train_iter, test_iter, num_epochs, device_name)
-    net.fit(train_iter, epochs=num_epochs, verbose=0, callbacks=[callback])
+    net.fit(train_iter, epochs=num_epochs, verbose=1, callbacks=[callback])
+    plt.show()
     return net
 
 
-class RNNModelScratch:
-    """从零开始实现的循环神经网络模型"""
-    def __init__(self, vocab_size, num_hiddens, init_state, forward_fn, get_params):
-        self.vocab_size, self.num_hiddens = vocab_size, num_hiddens
-        self.init_state, self.forward_fn = init_state, forward_fn
-        self.trainable_variables = get_params(vocab_size, num_hiddens)
+class Residual(tf.keras.Model):
+    def __init__(self, num_channels, use_1x1conv=False, strides=1):
+        super().__init__()
+        self.conv1 = tf.keras.layers.Conv2D(num_channels, kernel_size=3, padding='same', strides=strides)
+        self.conv2 = tf.keras.layers.Conv2D(num_channels, kernel_size=3, padding='same')
+        self.conv3 = None
+        if use_1x1conv:
+            self.conv3 = tf.keras.layers.Conv2D(num_channels, kernel_size=1, strides=strides)
+        self.bn1 = tf.keras.layers.BatchNormalization()
+        self.bn2 = tf.keras.layers.BatchNormalization()
 
-    def __call__(self, X, state):
-        X = tf.one_hot(tf.transpose(X), self.vocab_size)
-        X = tf.cast(X, tf.float32)
-        return self.forward_fn(X, state, self.trainable_variables)
-
-    def begin_state(self, batch_size, *args, **kwargs):
-        return self.init_state(batch_size, self.num_hiddens)
+    def call(self, X):
+        Y = tf.keras.activations.relu(self.bn1(self.conv1(X)))
+        Y = self.bn2(self.conv2(Y))
+        if self.conv3 is not None:
+            X = self.conv3(X)
+        Y += X
+        return tf.keras.activations.relu(Y)
 
 
 def predict_rnn(prefix, num_preds, net, vocab):

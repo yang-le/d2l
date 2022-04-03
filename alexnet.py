@@ -7,7 +7,7 @@ def net():
         # 这里，我们使用一个11*11的更大窗口来捕捉对象。
         # 同时，步幅为4，以减少输出的高度和宽度。
         # 另外，输出通道的数目远大于LeNet
-        tf.keras.layers.Conv2D(filters=96, kernel_size=11, strides=4, activation='relu', input_shape=(224, 224, 1)),
+        tf.keras.layers.Conv2D(filters=96, kernel_size=11, strides=4, activation='relu'),
         tf.keras.layers.MaxPool2D(pool_size=3, strides=2),
         # 减小卷积窗口，使用填充为2来使得输入与输出的高和宽一致，且增大输出通道数
         tf.keras.layers.Conv2D(filters=256, kernel_size=5, padding='same', activation='relu'),

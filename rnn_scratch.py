@@ -38,6 +38,22 @@ def rnn(inputs, state, params):
     return tf.concat(outputs, axis=0), (H,)
 
 
+class RNNModelScratch:
+    """从零开始实现的循环神经网络模型"""
+    def __init__(self, vocab_size, num_hiddens, init_state, forward_fn, get_params):
+        self.vocab_size, self.num_hiddens = vocab_size, num_hiddens
+        self.init_state, self.forward_fn = init_state, forward_fn
+        self.trainable_variables = get_params(vocab_size, num_hiddens)
+
+    def __call__(self, X, state):
+        X = tf.one_hot(tf.transpose(X), self.vocab_size)
+        X = tf.cast(X, tf.float32)
+        return self.forward_fn(X, state, self.trainable_variables)
+
+    def begin_state(self, batch_size, *args, **kwargs):
+        return self.init_state(batch_size, self.num_hiddens)
+
+
 if __name__ == "__main__":
     tf.compat.v1.enable_eager_execution()
 
@@ -56,7 +72,7 @@ if __name__ == "__main__":
 
     num_hiddens = 512
     with strategy.scope():
-        net = d2l.RNNModelScratch(len(vocab), num_hiddens, init_rnn_state, rnn, get_params)
+        net = RNNModelScratch(len(vocab), num_hiddens, init_rnn_state, rnn, get_params)
     state = net.begin_state(X.shape[0])
     Y, new_state = net(X, state)
     print(Y.shape, len(new_state), new_state[0].shape)
