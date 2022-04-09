@@ -29,12 +29,79 @@ DATA_HUB['time_machine'] = (
     DATA_URL + 'timemachine.txt',
     '090b5e7e70c295757f55df93cb0a180b9691891a')
 
+DATA_HUB['fra-eng'] = (
+    DATA_URL + 'fra-eng.zip',
+    '94646ad1522d915e7b0f9296181140edcf86a4f5')
+
+
+def read_data_nmt():
+    """载入“英语－法语”数据集"""
+    data_dir = download_extract('fra-eng')
+    with open(os.path.join(data_dir, 'fra.txt'), 'r', encoding='utf-8') as f:
+        return f.read()
+
 
 def read_time_machine():
     """将时间机器数据集加载到文本行的列表中"""
     with open(download('time_machine'), 'r') as f:
         lines = f.readlines()
     return [re.sub('[^A-Za-z]+', ' ', line).strip().lower() for line in lines]
+
+
+def preprocess_nmt(text):
+    """预处理“英语－法语”数据集"""
+
+    def no_space(char, prev_char):
+        return char in set(',.!?') and prev_char != ' '
+
+    # 使用空格替换不间断空格
+    # 使用小写字母替换大写字母
+    text = text.replace('\u202f', ' ').replace('\xa0', ' ').lower()
+    # 在单词和标点符号之间插入空格
+    out = [' ' + char if i > 0 and no_space(char, text[i - 1]) else char for i, char in enumerate(text)]
+    return ''.join(out)
+
+
+def tokenize_nmt(text, num_examples=None):
+    """词元化“英语－法语”数据数据集"""
+    source, target = [], []
+    for i, line in enumerate(text.split('\n')):
+        if num_examples and i > num_examples:
+            break
+        parts = line.split('\t')
+        if len(parts) == 2:
+            source.append(parts[0].split(' '))
+            target.append(parts[1].split(' '))
+    return source, target
+
+
+def truncate_pad(line, num_steps, padding_token):
+    """截断或填充文本序列"""
+    if len(line) > num_steps:
+        return line[:num_steps]  # 截断
+    return line + [padding_token] * (num_steps - len(line))  # 填充
+
+
+def build_array_nmt(lines, vocab, num_steps):
+    """将机器翻译的文本序列转换成小批量"""
+    lines = [vocab[l] for l in lines]
+    lines = [l + [vocab['<eos>']] for l in lines]
+    array = tf.constant([truncate_pad(l, num_steps, vocab['<pad>']) for l in lines])
+    valid_len = tf.reduce_sum(tf.cast(tf.not_equal(array, vocab['<pad>']), tf.int32), 1)
+    return array, valid_len
+
+
+def load_data_nmt(batch_size, num_steps, num_examples=600):
+    """返回翻译数据集的迭代器和词表"""
+    text = preprocess_nmt(read_data_nmt())
+    source, target = tokenize_nmt(text, num_examples)
+    src_vocab = Vocab(source, min_freq=2, reserved_tokens=['<pad>', '<bos>', '<eos>'])
+    tgt_vocab = Vocab(target, min_freq=2, reserved_tokens=['<pad>', '<bos>', '<eos>'])
+    src_array, src_valid_len = build_array_nmt(source, src_vocab, num_steps)
+    tgt_array, tgt_valid_len = build_array_nmt(target, tgt_vocab, num_steps)
+    data_arrays = (src_array, src_valid_len, tgt_array, tgt_valid_len)
+    data_iter = load_array(data_arrays, batch_size)
+    return data_iter, src_vocab, tgt_vocab
 
 
 def tokenize(lines, token='word'):
@@ -58,6 +125,7 @@ def count_corpus(tokens):
 
 class Vocab:
     """文本词表"""
+
     def __init__(self, tokens=None, min_freq=0, reserved_tokens=None):
         if tokens is None:
             tokens = []
@@ -154,6 +222,7 @@ def seq_data_iter_sequential(corpus, batch_size, num_steps):
 
 class SeqDataLoader:
     """加载序列数据的迭代器"""
+
     def __init__(self, batch_size, num_steps, use_random_iter, max_tokens):
         if use_random_iter:
             self.data_iter_fn = seq_data_iter_random
@@ -638,6 +707,23 @@ class Residual(tf.keras.Model):
         return tf.keras.activations.relu(Y)
 
 
+class RNNModelScratch:
+    """从零开始实现的循环神经网络模型"""
+
+    def __init__(self, vocab_size, num_hiddens, init_state, forward_fn, get_params):
+        self.vocab_size, self.num_hiddens = vocab_size, num_hiddens
+        self.init_state, self.forward_fn = init_state, forward_fn
+        self.trainable_variables = get_params(vocab_size, num_hiddens)
+
+    def __call__(self, X, state):
+        X = tf.one_hot(tf.transpose(X), self.vocab_size)
+        X = tf.cast(X, tf.float32)
+        return self.forward_fn(X, state, self.trainable_variables)
+
+    def begin_state(self, batch_size, *args, **kwargs):
+        return self.init_state(batch_size, self.num_hiddens)
+
+
 def predict_rnn(prefix, num_preds, net, vocab):
     """在prefix后面生成新字符"""
     state = net.begin_state(batch_size=1, dtype=tf.float32)
@@ -714,3 +800,206 @@ def train_rnn(net, train_iter, vocab, lr, num_epochs, strategy, use_random_iter=
     print(f'困惑度 {ppl:.1f}, {speed:.1f} 词元/秒')
     print(predict('time traveller'))
     print(predict('traveller'))
+
+
+class RNNModel(tf.keras.layers.Layer):
+    def __init__(self, rnn_layer, vocab_size, **kwargs):
+        super(RNNModel, self).__init__(**kwargs)
+        self.rnn = rnn_layer
+        self.vocab_size = vocab_size
+        self.dense = tf.keras.layers.Dense(vocab_size)
+
+    def call(self, inputs, state):
+        X = tf.one_hot(tf.transpose(inputs), self.vocab_size)
+        # rnn返回两个以上的值
+        Y, *state = self.rnn(X, state)
+        output = self.dense(tf.reshape(Y, (-1, Y.shape[-1])))
+        return output, state
+
+    def begin_state(self, *args, **kwargs):
+        return self.rnn.cell.get_initial_state(*args, **kwargs)
+
+
+class Encoder(tf.keras.layers.Layer):
+    """编码器-解码器架构的基本编码器接口"""
+
+    def __init__(self, **kwargs):
+        super(Encoder, self).__init__(**kwargs)
+
+    def call(self, X, *args, **kwargs):
+        raise NotImplementedError
+
+
+class Decoder(tf.keras.layers.Layer):
+    """编码器-解码器架构的基本解码器接口"""
+
+    def __init__(self, **kwargs):
+        super(Decoder, self).__init__(**kwargs)
+
+    def init_state(self, enc_outputs, *args):
+        raise NotImplementedError
+
+    def call(self, X, state, **kwargs):
+        raise NotImplementedError
+
+
+class EncoderDecoder(tf.keras.Model):
+    """编码器-解码器架构的基类"""
+
+    def __init__(self, encoder, decoder, **kwargs):
+        super(EncoderDecoder, self).__init__(**kwargs)
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def call(self, enc_X, dec_X, *args, **kwargs):
+        enc_outputs = self.encoder(enc_X, *args, **kwargs)
+        dec_state = self.decoder.init_state(enc_outputs, *args)
+        return self.decoder(dec_X, dec_state, **kwargs)
+
+
+class Seq2SeqEncoder(Encoder):
+    """用于序列到序列学习的循环神经网络编码器"""
+
+    def __init__(self, vocab_size, embed_size, num_hiddens, num_layers, dropout=0, **kwargs):
+        super(Seq2SeqEncoder, self).__init__(**kwargs)
+        # 嵌入层
+        self.embedding = tf.keras.layers.Embedding(vocab_size, embed_size)
+        self.rnn = tf.keras.layers.RNN(tf.keras.layers.StackedRNNCells([
+            tf.keras.layers.GRUCell(num_hiddens, dropout=dropout) for _ in range(num_layers)
+        ]), return_sequences=True, return_state=True)
+
+    def call(self, X, *args, **kwargs):
+        # 输入'X'的形状：(batch_size,num_steps)
+        # 输出'X'的形状：(batch_size,num_steps,embed_size)
+        X = self.embedding(X)
+        output = self.rnn(X, **kwargs)
+        state = output[1:]
+        return output[0], state
+
+
+class Seq2SeqDecoder(Decoder):
+    """用于序列到序列学习的循环神经网络解码器"""
+
+    def __init__(self, vocab_size, embed_size, num_hiddens, num_layers, dropout=0, **kwargs):
+        super(Seq2SeqDecoder, self).__init__(**kwargs)
+        self.embedding = tf.keras.layers.Embedding(vocab_size, embed_size)
+        self.rnn = tf.keras.layers.RNN(tf.keras.layers.StackedRNNCells([
+            tf.keras.layers.GRUCell(num_hiddens, dropout=dropout) for _ in range(num_layers)
+        ]), return_sequences=True, return_state=True)
+        self.dense = tf.keras.layers.Dense(vocab_size)
+
+    def init_state(self, enc_ouputs, *args):
+        return enc_ouputs[1]
+
+    def call(self, X, state, **kwargs):
+        # 输出'X'的形状：(batch_size,num_steps,embed_size)
+        X = self.embedding(X)
+        # 广播context，使其具有与X相同的num_steps
+        context = tf.repeat(tf.expand_dims(state[-1], axis=1), repeats=X.shape[1], axis=1)
+        X_and_context = tf.concat((X, context), axis=2)
+        rnn_output = self.rnn(X_and_context, state, **kwargs)
+        output = self.dense(rnn_output[0])
+        # output的形状:(batch_size,num_steps,vocab_size)
+        # state是一个包含num_layers个元素的列表，每个元素的形状:(batch_size,num_hiddens)
+        return output, rnn_output[1:]
+
+
+def sequence_mask(X, valid_len, value=0):
+    """在序列中屏蔽不相关的项"""
+    maxlen = X.shape[1]
+    mask = tf.range(start=0, limit=maxlen)[None, :] < valid_len[:, None]
+
+    if len(X.shape) == 3:
+        return tf.where(tf.expand_dims(mask, axis=-1), X, tf.zeros_like(X) + value)
+    else:
+        return tf.where(mask, X, tf.zeros_like(X) + value)
+
+
+class MaskedSoftmaxCELoss(tf.keras.losses.Loss):
+    """带遮蔽的softmax交叉熵损失函数"""
+
+    def __init__(self, valid_len):
+        super().__init__(reduction='none')
+        self.valid_len = valid_len
+
+    # pred的形状：(batch_size,num_steps,vocab_size)
+    # label的形状：(batch_size,num_steps)
+    # valid_len的形状：(batch_size,)
+    def call(self, label, pred):
+        weights = tf.ones_like(label, dtype=tf.float32)
+        weights = sequence_mask(weights, self.valid_len)
+        label_one_hot = tf.one_hot(label, depth=pred.shape[-1])
+        unweighted_loss = tf.keras.losses.CategoricalCrossentropy(
+            from_logits=True, reduction='none')(label_one_hot, pred)
+        weighted_loss = tf.reduce_mean((unweighted_loss * weights), axis=1)
+        return weighted_loss
+
+
+def train_seq2seq(net, data_iter, lr, num_epochs, tgt_vocab, strategy, device):
+    """训练序列到序列模型"""
+    with strategy.scope():
+        optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
+    animator = Animator(xlabel='epoch', ylabel='loss', xlim=[10, num_epochs])
+    for epoch in range(num_epochs):
+        timer = Timer()
+        metric = Accumulator(2)  # 训练损失总和，词元数量
+        for batch in data_iter:
+            X, X_valid_len, Y, Y_valid_len = [x for x in batch]
+            bos = tf.reshape(tf.constant([tgt_vocab['<bos>']] * Y.shape[0]), shape=(-1, 1))
+            dec_input = tf.concat([bos, Y[:, :-1]], 1)  # 强制教学
+            with tf.GradientTape() as tape:
+                Y_hat, _ = net(X, dec_input, X_valid_len, training=True)
+                l = MaskedSoftmaxCELoss(Y_valid_len)(Y, Y_hat)
+            gradients = tape.gradient(l, net.trainable_variables)
+            gradients = grad_clipping(gradients, 1)
+            optimizer.apply_gradients(zip(gradients, net.trainable_variables))
+            num_tokens = tf.reduce_sum(Y_valid_len).numpy()
+            metric.add(tf.reduce_sum(l), num_tokens)
+        if (epoch + 1) % 10 == 0:
+            animator.add(epoch + 1, (metric[0] / metric[1],))
+    print(f'loss {metric[0] / metric[1]:.3f}, {metric[1] / timer.stop():.1f} '
+          f'tokens/sec on {str(device)}')
+
+
+def predict_seq2seq(net, src_sentence, src_vocab, tgt_vocab, num_steps, save_attention_weights=False):
+    """序列到序列模型的预测"""
+    src_tokens = src_vocab[src_sentence.lower().split(' ')] + [src_vocab['<eos>']]
+    enc_valid_len = tf.constant([len(src_tokens)])
+    src_tokens = truncate_pad(src_tokens, num_steps, src_vocab['<pad>'])
+    # 添加批量轴
+    enc_X = tf.expand_dims(src_tokens, axis=0)
+    enc_outputs = net.encoder(enc_X, enc_valid_len, training=False)
+    dec_state = net.decoder.init_state(enc_outputs, enc_valid_len)
+    # 添加批量轴
+    dec_X = tf.expand_dims(tf.constant([tgt_vocab['<bos>']]), axis=0)
+    output_seq, attention_weight_seq = [], []
+    for _ in range(num_steps):
+        Y, dec_state = net.decoder(dec_X, dec_state, training=False)
+        # 我们使用具有预测最高可能性的词元，作为解码器在下一时间步的输入
+        dec_X = tf.argmax(Y, axis=2)
+        pred = tf.squeeze(dec_X, axis=0)
+        # 保存注意力权重
+        if save_attention_weights:
+            attention_weight_seq.append(net.decoder.attention_weights)
+        # 一旦序列结束词元被预测，输出序列的生成就完成了
+        if pred == tgt_vocab['<eos>']:
+            break
+        output_seq.append(pred.numpy())
+    return ' '.join(tgt_vocab.to_tokens(tf.reshape(output_seq, shape=-1).numpy().tolist())), attention_weight_seq
+
+
+def bleu(pred_seq, label_seq, k):
+    """计算BLEU"""
+    pred_tokens, label_tokens = pred_seq.split(' '), label_seq.split(' ')
+    len_pred, len_label = len(pred_tokens), len(label_tokens)
+    score = math.exp(min(0, 1 - len_label / len_pred))
+    for n in range(1, k + 1):
+        num_matches, label_subs = 0, collections.defaultdict(int)
+        for i in range(len_label - n + 1):
+            label_subs[' '.join(label_tokens[i: i + n])] += 1
+        for i in range(len_pred - n + 1):
+            if label_subs[' '.join(pred_tokens[i: i + n])] > 0:
+                num_matches += 1
+                label_subs[' '.join(pred_tokens[i: i + n])] -= 1
+        score *= math.pow(num_matches / (len_pred - n + 1), math.pow(0.5, n))
+    return score
