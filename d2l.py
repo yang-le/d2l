@@ -947,9 +947,11 @@ def train_seq2seq(net, data_iter, lr, num_epochs, tgt_vocab, strategy, device):
             X, X_valid_len, Y, Y_valid_len = [x for x in batch]
             bos = tf.reshape(tf.constant([tgt_vocab['<bos>']] * Y.shape[0]), shape=(-1, 1))
             dec_input = tf.concat([bos, Y[:, :-1]], 1)  # 强制教学
+            with strategy.scope():
+                loss = MaskedSoftmaxCELoss(Y_valid_len)
             with tf.GradientTape() as tape:
                 Y_hat, _ = net(X, dec_input, X_valid_len, training=True)
-                l = MaskedSoftmaxCELoss(Y_valid_len)(Y, Y_hat)
+                l = loss(Y, Y_hat)
             gradients = tape.gradient(l, net.trainable_variables)
             gradients = grad_clipping(gradients, 1)
             optimizer.apply_gradients(zip(gradients, net.trainable_variables))
@@ -977,15 +979,15 @@ def predict_seq2seq(net, src_sentence, src_vocab, tgt_vocab, num_steps, save_att
         Y, dec_state = net.decoder(dec_X, dec_state, training=False)
         # 我们使用具有预测最高可能性的词元，作为解码器在下一时间步的输入
         dec_X = tf.argmax(Y, axis=2)
-        pred = tf.squeeze(dec_X, axis=0)
+        pred = tf.squeeze(dec_X, axis=0).numpy()
         # 保存注意力权重
         if save_attention_weights:
             attention_weight_seq.append(net.decoder.attention_weights)
         # 一旦序列结束词元被预测，输出序列的生成就完成了
         if pred == tgt_vocab['<eos>']:
             break
-        output_seq.append(pred.numpy())
-    return ' '.join(tgt_vocab.to_tokens(tf.reshape(output_seq, shape=-1).numpy().tolist())), attention_weight_seq
+        output_seq.append(pred)
+    return ' '.join(tgt_vocab.to_tokens(tf.reshape(output_seq, shape=(-1,)).numpy().tolist())), attention_weight_seq
 
 
 def bleu(pred_seq, label_seq, k):

@@ -18,7 +18,14 @@ if __name__ == "__main__":
     with strategy.scope():
         net = d2l.EncoderDecoder(encoder, decoder)
 
+    try:
+        net.load_weights('nmt.params')
+    except Exception:
+        ...
+
     d2l.train_seq2seq(net, train_iter, lr, num_epochs, tgt_vocab, strategy, 'DML:0')
+    net.save_weights('nmt.params')
+    d2l.plt.show()
 
     engs = ['go .', "i lost .", 'he\'s calm .', 'i\'m home .']
     fras = ['va !', 'j\'ai perdu .', 'il est calme .', 'je suis chez moi .']
