@@ -471,7 +471,7 @@ def train_on_dev_(net, train_iter, test_iter, loss, trainer, num_epochs, device)
     timer, num_batches = Timer(), len(train_iter)
     for epoch in range(num_epochs):
         # 训练损失之和，训练准确率之和，样本数
-        metric = Accumulator(3)
+        metric = Accumulator(4)
         net.train()
         for i, (X, y) in enumerate(train_iter):
             timer.start()
@@ -482,10 +482,10 @@ def train_on_dev_(net, train_iter, test_iter, loss, trainer, num_epochs, device)
             l.backward()
             trainer.step()
             with torch.no_grad():
-                metric.add(l * X.shape[0], accuracy(y_hat, y), X.shape[0])
+                metric.add(l * X.shape[0], accuracy(y_hat, y), X.shape[0], y.numel())
             timer.stop()
             train_l = metric[0] / metric[2]
-            train_acc = metric[1] / metric[2]
+            train_acc = metric[1] / metric[3]
             print(f'[{i}/{num_batches}] loss {train_l:.3f}, acc {train_acc:.3f}')
             if (i + 1) % (num_batches // 5) == 0 or i == num_batches - 1:
                 animator.add(epoch + (i + 1) / num_batches, (train_l, train_acc, None))
