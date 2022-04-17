@@ -13,7 +13,7 @@ def train_fine_tuning(net, learning_rate, batch_size=128, num_epochs=5, param_gr
     test_iter = torch.utils.data.DataLoader(
         torchvision.datasets.ImageFolder(os.path.join(data_dir, 'test'), transform=test_augs),
         batch_size=batch_size)
-    device = d2l.try_dml()
+    device = d2l.try_gpu()
     loss = nn.CrossEntropyLoss()
     net.to(device)
     if param_group:
@@ -54,3 +54,7 @@ if __name__ == "__main__":
     nn.init.xavier_uniform_(finetune_net.fc.weight)
 
     train_fine_tuning(finetune_net, 5e-5)
+
+    scratch_net = torchvision.models.resnet18()
+    scratch_net.fc = nn.Linear(scratch_net.fc.in_features, 2)
+    train_fine_tuning(scratch_net, 5e-4, param_group=False)
