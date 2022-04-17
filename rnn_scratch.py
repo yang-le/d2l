@@ -46,8 +46,8 @@ if __name__ == "__main__":
     train_iter, vocab = d2l.load_data_time_machine(batch_size, num_steps)
 
     num_hiddens = 512
-    net = RNNModelScratch(len(vocab), num_hiddens, d2l.try_dml(), get_params, init_rnn_state, rnn)
-    print(d2l.predict_rnn('time traveller ', 10, net, vocab, d2l.try_dml()))
+    net = d2l.RNNModelScratch(len(vocab), num_hiddens, d2l.try_gpu(), get_params, init_rnn_state, rnn)
+    print(d2l.predict_rnn('time traveller ', 10, net, vocab, d2l.try_gpu()))
 
     num_epochs, lr = 500, 1
-    d2l.train_rnn(net, train_iter, vocab, lr, num_epochs, d2l.try_dml())
+    d2l.train_rnn(net, train_iter, vocab, lr, num_epochs, d2l.try_gpu())
