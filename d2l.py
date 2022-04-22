@@ -7,12 +7,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from IPython import display
 
+from PIL import Image
 import hashlib
 import os
 import tarfile
 import zipfile
 import requests
 import random
+
 
 DATA_HUB = dict()
 DATA_URL = 'http://d2l-data.s3-accelerate.amazonaws.com/'
@@ -1354,4 +1356,30 @@ class TransformerDecoder(AttentionDecoder):
     @property
     def attention_weights(self):
         return self._attention_weights
+
+
+def resnet18(num_classes):
+    """稍加修改的ResNet-18模型"""
+    def resnet_block(out_channels, num_residuals, first_block=False):
+        blk = tf.keras.Sequential()
+        for i in range(num_residuals):
+            if i == 0 and not first_block:
+                blk.add(Residual(out_channels, use_1x1conv=True, strides=2))
+            else:
+                blk.add(Residual(out_channels))
+        return blk
+
+    # 该模型使用了更小的卷积核、步长和填充，而且删除了最大汇聚层
+    net = tf.keras.Sequential([
+        tf.keras.layers.Conv2D(64, kernel_size=32, strides=1, padding='same'),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Activation('relu'),
+        resnet_block(64, 2, first_block=True),
+        resnet_block(128, 2),
+        resnet_block(256, 2),
+        resnet_block(512, 2),
+        tf.keras.layers.GlobalAvgPool2D(),
+        tf.keras.layers.Dense(units=num_classes)
+    ])
+    return net
 
