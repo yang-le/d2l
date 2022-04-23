@@ -62,7 +62,7 @@ def style_content_loss(outputs):
     return style_loss, content_loss
 
 
-@tf.function()
+@tf.function
 def train_step(image):
     with tf.GradientTape() as tape:
         outputs = extractor(image)
@@ -118,9 +118,9 @@ if __name__ == "__main__":
     image = tf.Variable(content_img)
     opt = tf.keras.optimizers.Adam(learning_rate=0.02, beta_1=0.99, epsilon=1e-1)
 
-    style_weight = 1e-5
-    content_weight = 1e5
-    total_variation_weight = 1e2
+    style_weight = 1e-2
+    content_weight = 1e4
+    total_variation_weight = 30
 
     num_epochs = 500
     animator = d2l.Animator(xlabel='epoch', ylabel='loss', xlim=[10, num_epochs], legend=['style', 'content', 'tv'],
