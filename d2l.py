@@ -55,6 +55,38 @@ DATA_HUB['cifar10_tiny'] = (
     DATA_URL + 'kaggle_cifar10_tiny.zip',
     '2068874e4b9a9f0fb07ebe0ad2b29754449ccacd'
 )
+DATA_HUB['ptb'] = (
+    DATA_URL + 'ptb.zip',
+    '319d85e578af0cdc590547f26231e4e31cdf1e42'
+)
+DATA_HUB['glove.6b.50d'] = (
+    DATA_URL + 'glove.6B.50d.zip',
+    '0b8703943ccdb6eb788e6f091b8946e82231bc4d'
+)
+DATA_HUB['glove.6b.100d'] = (
+    DATA_URL + 'glove.6B.100d.zip',
+    'cd43bfb07e44e6f27cbcc7bc9ae3d80284fdaf5a'
+)
+DATA_HUB['glove.42b.300d'] = (
+    DATA_URL + 'glove.42B.300d.zip',
+    'b5116e234e9eb9076672cfeabf5469f3eec904fa'
+)
+DATA_HUB['wiki.en'] = (
+    DATA_URL + 'wiki.en.zip',
+    'c1816da3821ae9f43899be655002f6c723e91b88'
+)
+DATA_HUB['wikitext-2'] = (
+    'https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip',
+    '3c914d17d80b1459be871a5039ac23e752a53cbe'
+)
+DATA_HUB['aclImdb'] = (
+    'http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz',
+    '01ada507287d82875905620988597833ad4e0903'
+)
+DATA_HUB['SNLI'] = (
+    'https://nlp.stanford.edu/projects/snli/snli_1.0.zip',
+    '9fcde07509c7e87ec61c640c1b2753d9041758e4'
+)
 
 VOC_COLORMAP = [[0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0],
                 [0, 0, 128], [128, 0, 128], [0, 128, 128], [128, 128, 128],
@@ -597,7 +629,7 @@ def train_on_dev(net, train_iter, test_iter, num_epochs, lr, device):
 def tokenize(lines, token='word'):
     """将文本行拆分为单词或字符词元"""
     if token == 'word':
-        return [line.splite() for line in lines]
+        return [line.split() for line in lines]
     elif token == 'char':
         return [list(line) for line in lines]
     else:
@@ -1159,7 +1191,7 @@ class Seq2SeqAttentionDecoder(AttentionDecoder):
         # outputs的形状为(batch_size，num_steps，num_hiddens).
         # hidden_state的形状为(num_layers，batch_size，num_hiddens)
         outputs, hidden_states = enc_outputs
-        return (outputs.permute(1, 0, 2), hidden_states, enc_valid_lens)
+        return outputs.permute(1, 0, 2), hidden_states, enc_valid_lens
 
     def forward(self, X, state):
         # enc_outputs的形状为(batch_size,num_steps,num_hiddens).
@@ -1602,7 +1634,7 @@ def box_iou(boxes1, boxes2):
     """计算两个锚框或边界框列表中成对的交并比"""
 
     def box_area(boxes):
-        return ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]))
+        return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
 
     # boxes1,boxes2,areas1,areas2的形状:
     # boxes1：(boxes1的数量,4),
@@ -1682,7 +1714,7 @@ def multibox_target(anchors, labels):
     bbox_offset = torch.stack(batch_offset)
     bbox_mask = torch.stack(batch_mask)
     class_labels = torch.stack(batch_class_labels)
-    return (bbox_offset, bbox_mask, class_labels)
+    return bbox_offset, bbox_mask, class_labels
 
 
 def read_data_bananas(is_train=True):
@@ -1709,7 +1741,7 @@ class BananasDataset(torch.utils.data.Dataset):
         print('read ' + str(len(self.features)) + (f' training examples' if is_train else f' validation examples'))
 
     def __getitem__(self, idx):
-        return (self.features[idx].float(), self.labels[idx])
+        return self.features[idx].float(), self.labels[idx]
 
     def __len__(self):
         return len(self.features)
@@ -1778,7 +1810,7 @@ class VOCSegDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         feature, label = voc_rand_crop(self.features[idx], self.labels[idx], *self.crop_size)
-        return (feature, voc_label_indices(label, self.colormap2label))
+        return feature, voc_label_indices(label, self.colormap2label)
 
     def __len__(self):
         return len(self.features)
@@ -1834,3 +1866,489 @@ def reorg_test(data_dir):
     for test_file in os.listdir(os.path.join(data_dir, 'test')):
         copyfile(os.path.join(data_dir, 'test', test_file),
                  os.path.join(data_dir, 'train_valid_test', 'test', 'unknown'))
+
+
+def read_ptb():
+    """将PTB数据集加载到文本行的列表中"""
+    data_dir = download_extract('ptb')
+    with open(os.path.join(data_dir, 'ptb.train.txt')) as f:
+        raw_text = f.read()
+    return [line.split() for line in raw_text.split('\n')]
+
+
+def subsample(sentences, vocab):
+    """下采样高频词"""
+    # 排除未知词元'<unk>'
+    sentences = [[token for token in line if vocab[token] != vocab.unk] for line in sentences]
+    counter = count_corpus(sentences)
+    num_tokens = sum(counter.values())
+
+    # 如果在下采样期间保留词元，则返回True
+    def keep(token):
+        return random.uniform(0, 1) < math.sqrt(1e-4 / counter[token] * num_tokens)
+
+    return [[token for token in line if keep(token)] for line in sentences], counter
+
+
+def get_centers_and_contexts(corpus, max_window_size):
+    """返回跳元模型中的中心词和上下文词"""
+    centers, contexts = [], []
+    for line in corpus:
+        # 要形成“中心词-上下文词”对，每个句子至少需要有2个词
+        if len(line) < 2:
+            continue
+        centers += line
+        for i in range(len(line)):  # 上下文窗口中间i
+            window_size = random.randint(1, max_window_size)
+            indices = list(range(max(0, i - window_size), min(len(line), i + 1 + window_size)))
+            # 从上下文词中排除中心词
+            indices.remove(i)
+            contexts.append([line[idx] for idx in indices])
+    return centers, contexts
+
+
+class RandomGenerator:
+    """根据n个采样权重在{1,...,n}中随机抽取"""
+
+    def __init__(self, sampling_weights):
+        # Exclude
+        self.population = list(range(1, len(sampling_weights) + 1))
+        self.sampling_weights = sampling_weights
+        self.candidates = []
+        self.i = 0
+
+    def draw(self):
+        if self.i == len(self.candidates):
+            # 缓存k个随机采样结果
+            self.candidates = random.choices(self.population, self.sampling_weights, k=10000)
+            self.i = 0
+        self.i += 1
+        return self.candidates[self.i - 1]
+
+
+def get_negatives(all_contexts, vocab, counter, K):
+    """返回负采样中的噪声词"""
+    # 索引为1、2、...（索引0是词表中排除的未知标记）
+    sampling_weights = [counter[vocab.to_tokens(i)] ** 0.75 for i in range(1, len(vocab))]
+    all_negatives, generator = [], RandomGenerator(sampling_weights)
+    for contexts in all_contexts:
+        negatives = []
+        while len(negatives) < len(contexts) * K:
+            neg = generator.draw()
+            # 噪声词不能是上下文词
+            if neg not in contexts:
+                negatives.append(neg)
+        all_negatives.append(negatives)
+    return all_negatives
+
+
+def batchify(data):
+    """返回带有负采样的跳元模型的小批量样本"""
+    max_len = max(len(c) + len(n) for _, c, n in data)
+    centers, contexts_negatives, masks, labels = [], [], [], []
+    for center, context, negative in data:
+        cur_len = len(context) + len(negative)
+        centers += [center]
+        contexts_negatives += [context + negative + [0] * (max_len - cur_len)]
+        masks += [[1] * cur_len + [0] * (max_len - cur_len)]
+        labels += [[1] * len(context) + [0] * (max_len - len(context))]
+    return (torch.tensor(centers).reshape((-1, 1)), torch.tensor(contexts_negatives), torch.tensor(masks),
+            torch.tensor(labels))
+
+
+class PTBDataset(torch.utils.data.Dataset):
+    def __init__(self, centers, contexts, negatives):
+        assert len(centers) == len(contexts) == len(negatives)
+        self.centers = centers
+        self.contexts = contexts
+        self.negatives = negatives
+
+    def __getitem__(self, index):
+        return self.centers[index], self.contexts[index], self.negatives[index]
+
+    def __len__(self):
+        return len(self.centers)
+
+
+def load_data_ptb(batch_size, max_window_size, num_noise_words):
+    """下载PTB数据集，然后将其加载到内存中"""
+    num_workers = get_dataloader_workers()
+    sentences = read_ptb()
+    vocab = Vocab(sentences, min_freq=10)
+    subsampled, counter = subsample(sentences, vocab)
+    corpus = [vocab[line] for line in subsampled]
+    all_centers, all_contexts = get_centers_and_contexts(corpus, max_window_size)
+    all_negatives = get_negatives(all_contexts, vocab, counter, num_noise_words)
+
+    dataset = PTBDataset(all_centers, all_contexts, all_negatives)
+    data_iter = torch.utils.data.DataLoader(dataset, batch_size, shuffle=True, collate_fn=batchify,
+                                            num_workers=num_workers)
+    return data_iter, vocab
+
+
+class TokenEmbedding:
+    """GloVe嵌入"""
+
+    def __init__(self, embedding_name):
+        self.idx_to_token, self.idx_to_vec = self._load_embedding(embedding_name)
+        self.unknown_idx = 0
+        self.token_to_idx = {token: idx for idx, token in enumerate(self.idx_to_token)}
+
+    def _load_embedding(self, embedding_name):
+        idx_to_token, idx_to_vec = ['<unk>'], []
+        data_dir = download_extract(embedding_name)
+        # GloVe网站：https://nlp.stanford.edu/projects/glove/
+        # fastText网站：https://fasttext.cc/
+        with open(os.path.join(data_dir, 'vec.txt'), 'r', encoding='utf-8') as f:
+            for line in f:
+                elems = line.rstrip().split(' ')
+                token, elems = elems[0], [float(elem) for elem in elems[1:]]
+                # 跳过标题信息，例如fastText中的首行
+                if len(elems) > 1:
+                    idx_to_token.append(token)
+                    idx_to_vec.append(elems)
+        idx_to_vec = [[0] * len(idx_to_vec[0])] + idx_to_vec
+        return idx_to_token, torch.tensor(idx_to_vec)
+
+    def __getitem__(self, tokens):
+        indices = [self.token_to_idx.get(token, self.unknown_idx) for token in tokens]
+        vecs = self.idx_to_vec[torch.tensor(indices)]
+        return vecs
+
+    def __len__(self):
+        return len(self.idx_to_token)
+
+
+def get_tokens_and_segments(tokens_a, tokens_b=None):
+    """获取输入序列的词元及其片段索引"""
+    tokens = ['<cls>'] + tokens_a + ['<sep>']
+    # 0和1分别标记片段A和B
+    segments = [0] * (len(tokens_a) + 2)
+    if tokens_b is not None:
+        tokens += tokens_b + ['<sep>']
+        segments += [1] * (len(tokens_b) + 1)
+    return tokens, segments
+
+
+class BERTEncoder(nn.Module):
+    """BERT编码器"""
+
+    def __init__(self, vocab_size, num_hiddens, norm_shape, ffn_num_input, ffn_num_hiddens, num_heads, num_layers,
+                 dropout, max_len=1000, key_size=768, query_size=768, value_size=768, **kwargs):
+        super(BERTEncoder, self).__init__(**kwargs)
+        self.token_embedding = nn.Embedding(vocab_size, num_hiddens)
+        self.segment_embedding = nn.Embedding(2, num_hiddens)
+        self.blks = nn.Sequential()
+        for i in range(num_layers):
+            self.blks.add_module(f"{i}", EncoderBlock(key_size, query_size, value_size, num_hiddens, norm_shape,
+                                                      ffn_num_input, ffn_num_hiddens, num_heads, dropout, True))
+        # 在BERT中，位置嵌入是可学习的，因此我们创建一个足够长的位置嵌入参数
+        self.pos_embedding = nn.Parameter(torch.randn(1, max_len, num_hiddens))
+
+    def forward(self, tokens, segments, valid_lens):
+        # 在以下代码段中，X的形状保持不变：（批量大小，最大序列长度，num_hiddens）
+        X = self.token_embedding(tokens) + self.segment_embedding(segments)
+        X = X + self.pos_embedding.data[:, :X.shape[1], :]
+        for blk in self.blks:
+            X = blk(X, valid_lens)
+        return X
+
+
+class MaskLM(nn.Module):
+    """BERT的掩蔽语言模型任务"""
+
+    def __init__(self, vocab_size, num_hiddens, num_inputs=768, **kwargs):
+        super(MaskLM, self).__init__(**kwargs)
+        self.mlp = nn.Sequential(nn.Linear(num_inputs, num_hiddens),
+                                 nn.ReLU(),
+                                 nn.LayerNorm(num_hiddens),
+                                 nn.Linear(num_hiddens, vocab_size))
+
+    def forward(self, X, pred_positions):
+        num_pred_positions = pred_positions.shape[1]
+        pred_positions = pred_positions.reshape(-1)
+        batch_size = X.shape[0]
+        batch_idx = torch.arange(0, batch_size)
+        # 假设batch_size=2，num_pred_positions=3
+        # 那么batch_idx是np.array（[0,0,0,1,1,1]）
+        batch_idx = torch.repeat_interleave(batch_idx, num_pred_positions)
+        masked_X = X[batch_idx, pred_positions]
+        masked_X = masked_X.reshape((batch_size, num_pred_positions, -1))
+        mlm_Y_hat = self.mlp(masked_X)
+        return mlm_Y_hat
+
+
+class NextSentencePred(nn.Module):
+    """BERT的下一句预测任务"""
+
+    def __init__(self, num_hiddens, num_inputs=768, **kwargs):
+        super(NextSentencePred, self).__init__(**kwargs)
+        self.mlp = nn.Sequential(nn.Linear(num_inputs, num_hiddens),
+                                 nn.Tanh(),
+                                 nn.Linear(num_hiddens, 2))
+
+    def forward(self, X):
+        # X的形状：(batchsize,num_hiddens)
+        return self.mlp(X)
+
+
+class BERTModel(nn.Module):
+    """BERT模型"""
+
+    def __init__(self, vocab_size, num_hiddens, norm_shape, ffn_num_input, ffn_num_hiddens, num_heads, num_layers,
+                 dropout, max_len=1000, key_size=768, query_size=768, value_size=768,
+                 mlm_in_features=768, nsp_in_features=768, **kwargs):
+        super(BERTModel, self).__init__(**kwargs)
+        self.encoder = BERTEncoder(vocab_size, num_hiddens, norm_shape, ffn_num_input, ffn_num_hiddens,
+                                   num_heads, num_layers, dropout, max_len=max_len,
+                                   key_size=key_size, query_size=query_size, value_size=value_size)
+
+        self.mlm = MaskLM(vocab_size, num_hiddens, mlm_in_features)
+        self.nsp = NextSentencePred(num_hiddens, nsp_in_features)
+
+    def forward(self, tokens, segments, valid_lens=None, pred_positions=None):
+        encoded_X = self.encoder(tokens, segments, valid_lens)
+        if pred_positions is not None:
+            mlm_Y_hat = self.mlm(encoded_X, pred_positions)
+        else:
+            mlm_Y_hat = None
+        # 用于下一句预测的多层感知机分类器的隐藏层，0是“<cls>”标记的索引
+        nsp_Y_hat = self.nsp(encoded_X[:, 0, :])
+        return encoded_X, mlm_Y_hat, nsp_Y_hat
+
+
+def _read_wiki(data_dir):
+    file_name = os.path.join(data_dir, 'wiki.train.tokens')
+    with open(file_name, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    # 大写字母转换为小写字母
+    paragraphs = [line.strip().lower().split(' . ') for line in lines if len(line.split(' . ')) >= 2]
+    random.shuffle(paragraphs)
+    return paragraphs
+
+
+def _get_next_sentence(sentence, next_sentence, paragraphs):
+    if random.random() < 0.5:
+        is_next = True
+    else:
+        # paragraphs是三重列表的嵌套
+        next_sentence = random.choice(random.choice(paragraphs))
+        is_next = False
+    return sentence, next_sentence, is_next
+
+
+def _get_nsp_data_from_paragraph(paragraph, paragraphs, max_len):
+    nsp_data_from_praragraph = []
+    for i in range(len(paragraph) - 1):
+        tokens_a, tokens_b, is_next = _get_next_sentence(paragraph[i], paragraph[i + 1], paragraphs)
+        # 考虑1个'<cls>'词元和2个'<sep>'词元
+        if len(tokens_a) + len(tokens_b) + 3 > max_len:
+            continue
+        tokens, segments = get_tokens_and_segments(tokens_a, tokens_b)
+        nsp_data_from_praragraph.append((tokens, segments, is_next))
+    return nsp_data_from_praragraph
+
+
+def _replace_mlm_tokens(tokens, candidate_pred_positions, num_mlm_preds, vocab):
+    # 为遮蔽语言模型的输入创建新的词元副本，其中输入可能包含替换的“<mask>”或随机词元
+    mlm_input_tokens = [token for token in tokens]
+    pred_positions_and_labels = []
+    # 打乱后用于在遮蔽语言模型任务中获取15%的随机词元进行预测
+    random.shuffle(candidate_pred_positions)
+    for mlm_pred_position in candidate_pred_positions:
+        if len(pred_positions_and_labels) >= num_mlm_preds:
+            break
+        # 80%的时间：将词替换为“<mask>”词元
+        if random.random() < 0.8:
+            masked_token = '<mask>'
+        else:
+            # 10%的时间：保持词不变
+            if random.random() < 0.5:
+                masked_token = tokens[mlm_pred_position]
+            # 10%的时间：用随机词替换该词
+            else:
+                masked_token = random.choice(vocab.idx_to_token)
+        mlm_input_tokens[mlm_pred_position] = masked_token
+        pred_positions_and_labels.append((mlm_pred_position, tokens[mlm_pred_position]))
+    return mlm_input_tokens, pred_positions_and_labels
+
+
+def _get_mlm_data_from_tokens(tokens, vocab):
+    candidate_pred_positions = []
+    # tokens是一个字符串列表
+    for i, token in enumerate(tokens):
+        # 在遮蔽语言模型任务中不会预测特殊词元
+        if token in ['<cls>', '<sep>']:
+            continue
+        candidate_pred_positions.append(i)
+    # 遮蔽语言模型任务中预测15%的随机词元
+    num_mlm_preds = max(1, round(len(tokens) * 0.15))
+    mlm_input_tokens, pred_positions_and_labels = _replace_mlm_tokens(
+        tokens, candidate_pred_positions, num_mlm_preds, vocab)
+    pred_positions_and_labels = sorted(pred_positions_and_labels, key=lambda x: x[0])
+    pred_positions = [v[0] for v in pred_positions_and_labels]
+    mlm_pred_labels = [v[1] for v in pred_positions_and_labels]
+    return vocab[mlm_input_tokens], pred_positions, vocab[mlm_pred_labels]
+
+
+def _pad_bert_inputs(examples, max_len, vocab):
+    max_num_mlm_preds = round(max_len * 0.15)
+    all_token_ids, all_segments, valid_lens = [], [], []
+    all_pred_positions, all_mlm_weights, all_mlm_labels = [], [], []
+    nsp_labels = []
+    for (token_ids, pred_positions, mlm_pred_label_ids, segments, is_next) in examples:
+        all_token_ids.append(torch.tensor(token_ids + [vocab['<pad>']] * (max_len - len(token_ids)), dtype=torch.long))
+        all_segments.append(torch.tensor(segments + [0] * (max_len - len(segments)), dtype=torch.long))
+        # valid_lens不包括'<pad>'的计数
+        valid_lens.append(torch.tensor(len(token_ids), dtype=torch.float32))
+        all_pred_positions.append(torch.tensor(
+            pred_positions + [0] * (max_num_mlm_preds - len(pred_positions)), dtype=torch.long))
+        # 填充词元的预测将通过乘以0权重在损失中过滤掉
+        all_mlm_weights.append(torch.tensor(
+            [1.0] * len(mlm_pred_label_ids) + [0.0] * (max_num_mlm_preds - len(pred_positions)), dtype=torch.float32))
+        all_mlm_labels.append(torch.tensor(
+            mlm_pred_label_ids + [0] * (max_num_mlm_preds - len(mlm_pred_label_ids)), dtype=torch.long))
+        nsp_labels.append(torch.tensor(is_next, dtype=torch.long))
+    return all_token_ids, all_segments, valid_lens, all_pred_positions, all_mlm_weights, all_mlm_labels, nsp_labels
+
+
+class _WikiTextDataset(torch.utils.data.Dataset):
+    def __init__(self, paragraphs, max_len):
+        # 输入paragraphs[i]是代表段落的句子字符串列表；
+        # 而输出paragraphs[i]是代表段落的句子列表，其中每个句子都是词元列表
+        paragraphs = [tokenize(paragraph, token='word') for paragraph in paragraphs]
+        sentences = [sentence for paragraph in paragraphs for sentence in paragraph]
+        self.vocab = Vocab(sentences, min_freq=5, reserved_tokens=['<pad>', '<mask>', '<cls>', '<sep>'])
+        # 获取下一句子预测任务的数据
+        examples = []
+        for paragraph in paragraphs:
+            examples.extend(_get_nsp_data_from_paragraph(paragraph, paragraphs, max_len))
+        # 获取遮蔽语言模型任务的数据
+        examples = [(_get_mlm_data_from_tokens(tokens, self.vocab) + (segments, is_next))
+                    for tokens, segments, is_next in examples]
+        # 填充输入
+        (self.all_token_ids, self.all_segments, self.valid_lens, self.all_pred_positions, self.all_mlm_weights,
+         self.all_mlm_labels, self.nsp_labels) = _pad_bert_inputs(examples, max_len, self.vocab)
+
+    def __getitem__(self, idx):
+        return (self.all_token_ids[idx], self.all_segments[idx], self.valid_lens[idx], self.all_pred_positions[idx],
+                self.all_mlm_weights[idx], self.all_mlm_labels[idx], self.nsp_labels[idx])
+
+    def __len__(self):
+        return len(self.all_token_ids)
+
+
+def load_data_wiki(batch_size, max_len):
+    """加载WikiText-2数据集"""
+    # num_workers = get_dataloader_workers()
+    data_dir = download_extract('wikitext-2', 'wikitext-2')
+    paragraphs = _read_wiki(data_dir)
+    train_set = _WikiTextDataset(paragraphs, max_len)
+    train_iter = torch.utils.data.DataLoader(train_set, batch_size, shuffle=True)
+    return train_iter, train_set.vocab
+
+
+def _get_batch_loss_bert(net, loss, vocab_size, tokens_X, segments_X, valid_lens_x, pred_positions_X,
+                         mlm_weights_X, mlm_Y, nsp_y):
+    # 前向传播
+    _, mlm_Y_hat, nsp_Y_hat = net(tokens_X, segments_X, valid_lens_x.reshape(-1), pred_positions_X)
+    # 计算遮蔽语言模型损失
+    mlm_l = loss(mlm_Y_hat.reshape(-1, vocab_size), mlm_Y.reshape(-1)) * mlm_weights_X.reshape(-1, 1)
+    mlm_l = mlm_l.sum() / (mlm_weights_X.sum() + 1e-8)
+    # 计算下一句子预测任务的损失
+    nsp_l = loss(nsp_Y_hat, nsp_y)
+    l = mlm_l + nsp_l
+    return mlm_l, nsp_l, l
+
+
+def read_imdb(data_dir, is_train):
+    """读取IMDb评论数据集文本序列和标签"""
+    data, labels = [], []
+    for label in ('pos', 'neg'):
+        folder_name = os.path.join(data_dir, 'train' if is_train else 'test', label)
+        for file in os.listdir(folder_name):
+            with open(os.path.join(folder_name, file), 'rb') as f:
+                review = f.read().decode('utf-8').replace('\n', '')
+                data.append(review)
+                labels.append(1 if label == 'pos' else 0)
+    return data, labels
+
+
+def load_data_imdb(batch_size, num_steps=500):
+    """返回数据迭代器和IMDb评论数据集的词表"""
+    data_dir = download_extract('aclImdb', 'aclImdb')
+    train_data = read_imdb(data_dir, True)
+    test_data = read_imdb(data_dir, False)
+    train_tokens = tokenize(train_data[0], token='word')
+    test_tokens = tokenize(test_data[0], token='word')
+    vocab = Vocab(train_tokens, min_freq=5, reserved_tokens=['<pad>'])
+    train_features = torch.tensor([truncate_pad(vocab[line], num_steps, vocab['<pad>']) for line in train_tokens])
+    test_features = torch.tensor([truncate_pad(vocab[line], num_steps, vocab['<pad>']) for line in test_tokens])
+    train_iter = load_array((train_features, torch.tensor(train_data[1])), batch_size)
+    test_iter = load_array((test_features, torch.tensor(test_data[1])), batch_size, is_train=False)
+    return train_iter, test_iter, vocab
+
+
+def predict_sentiment(net, vocab, sequence):
+    """预测文本序列的情感"""
+    sequence = torch.tensor(vocab[sequence.split()], device=net.device)
+    label = torch.argmax(net(sequence.reshape(1, -1)), dim=1)
+    return 'positive' if label == 1 else 'negative'
+
+
+def read_snli(data_dir, is_train):
+    """将SNLI数据集解析为前提、假设和标签"""
+    def extract_text(s):
+        # 删除我们不会使用的信息
+        s = re.sub('\\(', '', s)
+        s = re.sub('\\)', '', s)
+        # 用一个空格替换两个或多个连续的空格
+        s = re.sub('\\s{2,}', ' ', s)
+        return s.strip()
+
+    label_set = {'entailment': 0, 'contradiction': 1, 'neutral': 2}
+    file_name = os.path.join(data_dir, 'snli_1.0_train.txt' if is_train else 'snli_1.0_test.txt')
+    with open(file_name, 'r') as f:
+        rows = [row.split('\t') for row in f.readlines()[1:]]
+    premises = [extract_text(row[1]) for row in rows if row[0] in label_set]
+    hypothesis = [extract_text(row[2]) for row in rows if row[0] in label_set]
+    labels = [label_set[row[0]] for row in rows if row[0] in label_set]
+    return premises, hypothesis, labels
+
+
+class SNLIDataset(torch.utils.data.Dataset):
+    """用于加载SNLI数据集的自定义数据集"""
+    def __init__(self, dataset, num_steps, vocab=None):
+        self.num_steps = num_steps
+        all_premise_tokens = tokenize(dataset[0])
+        all_hypothesis_tokens = tokenize(dataset[1])
+        if vocab is None:
+            self.vocab = Vocab(all_premise_tokens + all_hypothesis_tokens, min_freq=5, reserved_tokens=['<pad>'])
+        else:
+            self.vocab = vocab
+        self.premises = self._pad(all_premise_tokens)
+        self.hypotheses = self._pad(all_hypothesis_tokens)
+        self.labels = torch.tensor(dataset[2])
+        print('read ' + str(len(self.premises)) + ' examples')
+
+    def _pad(self, lines):
+        return torch.tensor([truncate_pad(self.vocab[line], self.num_steps, self.vocab['<pad>']) for line in lines])
+
+    def __getitem__(self, idx):
+        return (self.premises[idx], self.hypotheses[idx]), self.labels[idx]
+
+    def __len__(self):
+        return len(self.premises)
+
+
+def load_data_snli(batch_size, num_steps=50):
+    """下载SNLI数据集并返回数据迭代器和词表"""
+    num_workers = get_dataloader_workers()
+    data_dir = '../data/snli_1.0'
+    train_data = read_snli(data_dir, True)
+    test_data = read_snli(data_dir, False)
+    train_set = SNLIDataset(train_data, num_steps)
+    test_set = SNLIDataset(test_data, num_steps, train_set.vocab)
+    train_iter = torch.utils.data.DataLoader(train_set, batch_size, shuffle=True, num_workers=num_workers)
+    test_iter = torch.utils.data.DataLoader(test_set, batch_size, shuffle=False, num_workers=num_workers)
+    return train_iter, test_iter, train_set.vocab
