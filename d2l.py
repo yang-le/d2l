@@ -87,6 +87,14 @@ DATA_HUB['SNLI'] = (
     'https://nlp.stanford.edu/projects/snli/snli_1.0.zip',
     '9fcde07509c7e87ec61c640c1b2753d9041758e4'
 )
+DATA_HUB['bert.base'] = (
+    DATA_URL + 'bert.base.torch.zip',
+    '225d66f04cae318b841a13d32af3acc165f253ac'
+)
+DATA_HUB['bert.small'] = (
+    DATA_URL + 'bert.small.torch.zip',
+    'c72329e68a732bef0452e4b96a1c341c8910f81f'
+)
 
 VOC_COLORMAP = [[0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0],
                 [0, 0, 128], [128, 0, 128], [0, 128, 128], [128, 128, 128],
@@ -603,7 +611,7 @@ def train_on_dev_(net, train_iter, test_iter, loss, trainer, num_epochs, device)
             l.backward()
             trainer.step()
             with torch.no_grad():
-                metric.add(l * X.shape[0], accuracy(y_hat, y), X.shape[0], y.numel())
+                metric.add(l * y.shape[0], accuracy(y_hat, y), y.shape[0], y.numel())
             timer.stop()
             train_l = metric[0] / metric[2]
             train_acc = metric[1] / metric[3]
@@ -2081,15 +2089,13 @@ class MaskLM(nn.Module):
 class NextSentencePred(nn.Module):
     """BERT的下一句预测任务"""
 
-    def __init__(self, num_hiddens, num_inputs=768, **kwargs):
+    def __init__(self, num_inputs=768, **kwargs):
         super(NextSentencePred, self).__init__(**kwargs)
-        self.mlp = nn.Sequential(nn.Linear(num_inputs, num_hiddens),
-                                 nn.Tanh(),
-                                 nn.Linear(num_hiddens, 2))
+        self.output = nn.Linear(num_inputs, 2)
 
     def forward(self, X):
         # X的形状：(batchsize,num_hiddens)
-        return self.mlp(X)
+        return self.output(X)
 
 
 class BERTModel(nn.Module):
@@ -2097,14 +2103,14 @@ class BERTModel(nn.Module):
 
     def __init__(self, vocab_size, num_hiddens, norm_shape, ffn_num_input, ffn_num_hiddens, num_heads, num_layers,
                  dropout, max_len=1000, key_size=768, query_size=768, value_size=768,
-                 mlm_in_features=768, nsp_in_features=768, **kwargs):
+                 hid_in_features=768, mlm_in_features=768, nsp_in_features=768, **kwargs):
         super(BERTModel, self).__init__(**kwargs)
         self.encoder = BERTEncoder(vocab_size, num_hiddens, norm_shape, ffn_num_input, ffn_num_hiddens,
                                    num_heads, num_layers, dropout, max_len=max_len,
                                    key_size=key_size, query_size=query_size, value_size=value_size)
-
+        self.hidden = nn.Sequential(nn.Linear(hid_in_features, num_hiddens), nn.Tanh())
         self.mlm = MaskLM(vocab_size, num_hiddens, mlm_in_features)
-        self.nsp = NextSentencePred(num_hiddens, nsp_in_features)
+        self.nsp = NextSentencePred(nsp_in_features)
 
     def forward(self, tokens, segments, valid_lens=None, pred_positions=None):
         encoded_X = self.encoder(tokens, segments, valid_lens)
@@ -2113,7 +2119,7 @@ class BERTModel(nn.Module):
         else:
             mlm_Y_hat = None
         # 用于下一句预测的多层感知机分类器的隐藏层，0是“<cls>”标记的索引
-        nsp_Y_hat = self.nsp(encoded_X[:, 0, :])
+        nsp_Y_hat = self.nsp(self.hidden(encoded_X[:, 0, :]))
         return encoded_X, mlm_Y_hat, nsp_Y_hat
 
 
@@ -2291,6 +2297,7 @@ def load_data_imdb(batch_size, num_steps=500):
 
 def predict_sentiment(net, vocab, sequence):
     """预测文本序列的情感"""
+    net.eval()
     sequence = torch.tensor(vocab[sequence.split()], device=net.device)
     label = torch.argmax(net(sequence.reshape(1, -1)), dim=1)
     return 'positive' if label == 1 else 'negative'
@@ -2352,3 +2359,12 @@ def load_data_snli(batch_size, num_steps=50):
     train_iter = torch.utils.data.DataLoader(train_set, batch_size, shuffle=True, num_workers=num_workers)
     test_iter = torch.utils.data.DataLoader(test_set, batch_size, shuffle=False, num_workers=num_workers)
     return train_iter, test_iter, train_set.vocab
+
+
+def predict_snli(net, vocab, premise, hypothesis):
+    """预测前提和假设之间的逻辑关系"""
+    net.eval()
+    premise = torch.tensor(vocab[premise], device=net.device)
+    hypothesis = torch.tensor(vocab[hypothesis], device=net.device)
+    label = torch.argmax(net([premise.reshape((1, -1)), hypothesis.reshape((1, -1))]), dim=1)
+    return 'entailment' if label == 0 else 'contradiction' if label == 1 else 'neutral'

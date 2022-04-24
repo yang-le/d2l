@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
     net = d2l.BERTModel(len(vocab), num_hiddens=128, norm_shape=[128], ffn_num_input=128, ffn_num_hiddens=256,
                         num_heads=2, num_layers=2, dropout=0.2, key_size=128, query_size=128, value_size=128,
-                        mlm_in_features=128, nsp_in_features=128)
+                        hid_in_features=128, mlm_in_features=128, nsp_in_features=128)
     device = d2l.try_gpu()
     loss = nn.CrossEntropyLoss()
 
